@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Terraria — Achievements</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="container">
+    <h1>Terraria — Achievements</h1>
+    <p class="sub">Liste + % global (Steam) • AppID 105600</p>
+
+    <div class="controls">
+      <input id="q" type="search" placeholder="Rechercher (nom / description / apiName)..." autocomplete="off" />
+      <select id="sort">
+        <option value="pct_desc">% global ↓</option>
+        <option value="pct_asc">% global ↑</option>
+        <option value="name_asc">Nom A→Z</option>
+        <option value="name_desc">Nom Z→A</option>
+      </select>
+      <label class="check">
+        <input id="showHidden" type="checkbox" checked />
+        afficher hidden
+      </label>
+      <button id="refresh" type="button">Rafraîchir</button>
+    </div>
+
+    <div class="meta">
+      <span id="status">Chargement…</span>
+      <span id="count"></span>
+    </div>
+  </header>
+
+  <main class="container">
+    <div id="grid" class="grid"></div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
