@@ -3,27 +3,45 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Terraria — Achievements</title>
+  <title>Steam Completion Tracker</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="container">
-    <h1>Terraria — Achievements</h1>
-    <p class="sub">Liste + % global (Steam) • AppID 105600</p>
+    <h1>Steam Completion Tracker</h1>
+    <p class="sub">Saisis un SteamID64 pour voir la completion des achievements de tes jeux</p>
 
-    <div class="controls">
-      <input id="q" type="search" placeholder="Rechercher (nom / description / apiName)..." autocomplete="off" />
-      <select id="sort">
-        <option value="pct_desc">% global ↓</option>
-        <option value="pct_asc">% global ↑</option>
+    <form id="steamForm" class="steamForm">
+      <input id="steamId" type="text" inputmode="numeric" placeholder="SteamID64 (17 chiffres)" autocomplete="off" />
+      <button id="loadGames" type="submit">Charger mes jeux</button>
+    </form>
+
+    <div id="errorBox" class="errorBox hidden"></div>
+
+    <div id="gamesControls" class="controls">
+      <input id="gameQ" type="search" placeholder="Rechercher un jeu..." autocomplete="off" />
+      <select id="gameSort">
+        <option value="completion_desc">Completion ↓</option>
+        <option value="completion_asc">Completion ↑</option>
         <option value="name_asc">Nom A→Z</option>
         <option value="name_desc">Nom Z→A</option>
       </select>
+      <button id="refreshGames" type="button">Rafraîchir</button>
+    </div>
+
+    <div id="achievementControls" class="controls hidden">
+      <input id="achQ" type="search" placeholder="Rechercher un achievement..." autocomplete="off" />
+      <select id="achSort">
+        <option value="unlock_desc">Unlocked d'abord</option>
+        <option value="pct_desc">% global ↓</option>
+        <option value="pct_asc">% global ↑</option>
+        <option value="name_asc">Nom A→Z</option>
+      </select>
       <label class="check">
-        <input id="showHidden" type="checkbox" checked />
-        afficher hidden
+        <input id="showLocked" type="checkbox" checked />
+        afficher verrouilles
       </label>
-      <button id="refresh" type="button">Rafraîchir</button>
+      <button id="backToGames" type="button">Retour aux jeux</button>
     </div>
 
     <div class="meta">
@@ -33,7 +51,8 @@
   </header>
 
   <main class="container">
-    <div id="grid" class="grid"></div>
+    <div id="gamesGrid" class="grid"></div>
+    <div id="achievementsGrid" class="grid hidden"></div>
   </main>
 
   <script src="app.js"></script>
