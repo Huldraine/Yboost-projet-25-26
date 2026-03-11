@@ -2,10 +2,14 @@ let currentSteamID = "";
 let allGames = [];
 let allAchievements = [];
 let currentGameName = "";
+let suggestionByLabel = new Map();
+let suggestionsByName = new Map();
+let suggestionsTimer = null;
 
 const els = {
   steamForm: document.getElementById("steamForm"),
   steamId: document.getElementById("steamId"),
+  userSuggestions: document.getElementById("userSuggestions"),
   status: document.getElementById("status"),
   count: document.getElementById("count"),
   errorBox: document.getElementById("errorBox"),
@@ -44,6 +48,18 @@ function isValidSteamID64(v) {
   return /^\d{17}$/.test(v);
 }
 
+function normalizeName(v) {
+  return String(v || "").trim().toLowerCase();
+}
+
+function formatSuggestionLabel(item) {
+  const name = (item.displayName || "").trim();
+  if (!name || name === item.steamId) {
+    return item.steamId;
+  }
+  return `${name} (${item.steamId})`;
+}
+
 async function getJSON(url) {
   const res = await fetch(url, { cache: "no-store" });
   const body = await res.json().catch(() => null);
@@ -52,6 +68,63 @@ async function getJSON(url) {
     throw new Error(details);
   }
   return body;
+}
+
+async function loadUserSuggestions(query) {
+  const q = String(query || "").trim();
+  if (q.length < 2) {
+    els.userSuggestions.innerHTML = "";
+    suggestionByLabel = new Map();
+    suggestionsByName = new Map();
+    return;
+  }
+
+  try {
+    const rows = await getJSON(`/api/users/suggestions?q=${encodeURIComponent(q)}`);
+    const list = Array.isArray(rows) ? rows : [];
+
+    suggestionByLabel = new Map();
+    suggestionsByName = new Map();
+
+    const options = list.map((item) => {
+      const label = formatSuggestionLabel(item);
+      suggestionByLabel.set(label, item.steamId);
+
+      const normalized = normalizeName(item.displayName);
+      if (normalized) {
+        const bucket = suggestionsByName.get(normalized) || [];
+        bucket.push(item.steamId);
+        suggestionsByName.set(normalized, bucket);
+      }
+
+      const avg = Number(item.avgCompletion || 0).toFixed(1);
+      const title = `${item.displayName || item.steamId} | ${item.gamesCount || 0} jeux | ${avg}% moyen`;
+      return `<option value="${esc(label)}" label="${esc(title)}"></option>`;
+    });
+
+    els.userSuggestions.innerHTML = options.join("");
+  } catch (_) {
+    // Ignore suggestion errors to keep main flow responsive.
+  }
+}
+
+function resolveSteamIDFromInput(rawValue) {
+  const v = String(rawValue || "").trim();
+  if (isValidSteamID64(v)) {
+    return v;
+  }
+
+  const byLabel = suggestionByLabel.get(v);
+  if (byLabel && isValidSteamID64(byLabel)) {
+    return byLabel;
+  }
+
+  const matches = suggestionsByName.get(normalizeName(v)) || [];
+  if (matches.length === 1 && isValidSteamID64(matches[0])) {
+    return matches[0];
+  }
+
+  return "";
 }
 
 function showGamesView() {
@@ -242,8 +315,21 @@ function renderAchievements() {
 
 els.steamForm.addEventListener("submit", (ev) => {
   ev.preventDefault();
-  currentSteamID = els.steamId.value.trim();
+  currentSteamID = resolveSteamIDFromInput(els.steamId.value);
+  if (!currentSteamID) {
+    setError("Choisis un pseudo propose (ou saisis un SteamID64 valide)");
+    return;
+  }
   loadGames();
+});
+
+els.steamId.addEventListener("input", () => {
+  if (suggestionsTimer) {
+    clearTimeout(suggestionsTimer);
+  }
+  suggestionsTimer = setTimeout(() => {
+    loadUserSuggestions(els.steamId.value);
+  }, 220);
 });
 
 els.refreshGames.addEventListener("click", () => loadGames(true));

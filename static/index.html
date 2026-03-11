@@ -9,10 +9,11 @@
 <body>
   <header class="container">
     <h1>Steam Completion Tracker</h1>
-    <p class="sub">Saisis un SteamID64 pour voir la completion des achievements de tes jeux</p>
+    <p class="sub">Saisis un pseudo (ou SteamID64) pour voir la completion des achievements</p>
 
     <form id="steamForm" class="steamForm">
-      <input id="steamId" type="text" inputmode="numeric" placeholder="SteamID64 (17 chiffres)" autocomplete="off" />
+      <input id="steamId" type="text" placeholder="Pseudo ou SteamID64 (17 chiffres)" autocomplete="off" list="userSuggestions" />
+      <datalist id="userSuggestions"></datalist>
       <button id="loadGames" type="submit">Charger mes jeux</button>
     </form>
 

@@ -61,6 +61,13 @@ type GameCompletion struct {
 	CompletionPct        float64 `json:"completionPct"`
 }
 
+type UserSuggestion struct {
+	SteamID       string  `json:"steamId"`
+	DisplayName   string  `json:"displayName"`
+	GamesCount    int     `json:"gamesCount"`
+	AvgCompletion float64 `json:"avgCompletion"`
+}
+
 type Server struct {
 	db              *sql.DB
 	apiKey          string
@@ -104,6 +111,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/achievements", s.handleAchievements)
+	mux.HandleFunc("/api/users/suggestions", s.handleUserSuggestions)
 	mux.HandleFunc("/api/users/games", s.handleUserGames)
 	mux.HandleFunc("/api/users/achievements", s.handleUserAchievements)
 
@@ -249,6 +257,17 @@ func (s *Server) handleUserGames(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, games)
+}
+
+func (s *Server) handleUserSuggestions(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	suggestions, err := s.readUserSuggestionsFromDB(q, 12)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+
+	writeJSON(w, suggestions)
 }
 
 func (s *Server) handleUserAchievements(w http.ResponseWriter, r *http.Request) {
@@ -493,7 +512,54 @@ func (s *Server) readUserAchievementsFromDB(steamID string, appID int) ([]Achiev
 	return out, rows.Err()
 }
 
+func (s *Server) readUserSuggestionsFromDB(query string, limit int) ([]UserSuggestion, error) {
+	if limit <= 0 {
+		limit = 12
+	}
+
+	like := "%"
+	if query != "" {
+		like = "%" + strings.ToLower(query) + "%"
+	}
+
+	rows, err := s.db.Query(`
+		SELECT
+			u.steam_id,
+			COALESCE(pname.value, u.steam_id) AS display_name,
+			COUNT(*) AS games_count,
+			COALESCE(AVG(u.completion_pct), 0.0) AS avg_completion
+		FROM user_games u
+		LEFT JOIN user_meta pname
+			ON pname.steam_id = u.steam_id AND pname.key = 'profile_name'
+		WHERE (? = '%' OR LOWER(u.steam_id) LIKE ? OR LOWER(COALESCE(pname.value, '')) LIKE ?)
+		GROUP BY u.steam_id, display_name
+		ORDER BY games_count DESC, avg_completion DESC, display_name ASC
+		LIMIT ?
+	`, like, like, like, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]UserSuggestion, 0, limit)
+	for rows.Next() {
+		var s UserSuggestion
+		if err := rows.Scan(&s.SteamID, &s.DisplayName, &s.GamesCount, &s.AvgCompletion); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+
+	return out, rows.Err()
+}
+
 func (s *Server) syncUserData(steamID string, lang string) error {
+	profileName, profileErr := fetchPlayerSummaryName(s.apiKey, steamID)
+	if profileErr != nil {
+		log.Printf("profile summary warning (steamID=%s): %v", steamID, profileErr)
+		profileName = ""
+	}
+
 	games, err := fetchOwnedGames(s.apiKey, steamID)
 	if err != nil {
 		if errors.Is(err, errProfilePrivate) {
@@ -617,6 +683,15 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 		ON CONFLICT(steam_id,key) DO UPDATE SET value=excluded.value
 	`, steamID, "last_sync", strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
 		return err
+	}
+
+	if profileName != "" {
+		if _, err := tx.Exec(`
+			INSERT INTO user_meta(steam_id,key,value) VALUES(?,?,?)
+			ON CONFLICT(steam_id,key) DO UPDATE SET value=excluded.value
+		`, steamID, "profile_name", profileName); err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit()
@@ -840,6 +915,32 @@ func fetchOwnedGames(apiKey string, steamID string) ([]OwnedGame, error) {
 	}
 
 	return out, nil
+}
+
+func fetchPlayerSummaryName(apiKey string, steamID string) (string, error) {
+	url := fmt.Sprintf("https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=%s&steamids=%s&format=json", apiKey, steamID)
+
+	body, err := httpGET(url)
+	if err != nil {
+		return "", err
+	}
+
+	var resp struct {
+		Response struct {
+			Players []struct {
+				PersonaName string `json:"personaname"`
+			} `json:"players"`
+		} `json:"response"`
+	}
+
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("player summary json parse: %w", err)
+	}
+	if len(resp.Response.Players) == 0 {
+		return "", nil
+	}
+
+	return strings.TrimSpace(resp.Response.Players[0].PersonaName), nil
 }
 
 type userAchievementState struct {
