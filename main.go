@@ -61,7 +61,7 @@ func main() {
 	_ = godotenv.Load() // charge .env si présent
 
 	port := getenv("PORT", "8080")
-	dbPath := getenv("DB_PATH", "terraria.db")
+	dbPath := getenv("DB_PATH", "steam_achievements.db")
 	apiKey := cleanEnvValue(os.Getenv("STEAM_API_KEY"))
 	if apiKey == "" {
 		log.Fatal("STEAM_API_KEY manquant (mets-le dans .env)")
