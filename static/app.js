@@ -5,6 +5,7 @@ let currentGameName = "";
 let suggestionByValue = new Map();
 let suggestionsByName = new Map();
 let suggestionsTimer = null;
+const API_FALLBACKS = ["http://127.0.0.1:8099", "http://localhost:8099"];
 
 const els = {
   steamForm: document.getElementById("steamForm"),
@@ -65,13 +66,50 @@ function formatSuggestionLabel(item) {
 }
 
 async function getJSON(url) {
-  const res = await fetch(url, { cache: "no-store" });
-  const body = await res.json().catch(() => null);
-  if (!res.ok) {
-    const details = body?.details || `HTTP ${res.status}`;
-    throw new Error(details);
+  const isApiPath = typeof url === "string" && url.startsWith("/api/");
+  if (!isApiPath) {
+    const res = await fetch(url, { cache: "no-store" });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      const details = body?.details || `HTTP ${res.status}`;
+      throw new Error(details);
+    }
+    return body;
   }
-  return body;
+
+  const bases = [];
+  const origin = window.location.origin;
+  if (origin && !origin.startsWith("file://")) {
+    bases.push(origin);
+  }
+  for (const fb of API_FALLBACKS) {
+    if (!bases.includes(fb)) {
+      bases.push(fb);
+    }
+  }
+
+  let lastError = null;
+  for (const base of bases) {
+    const fullURL = `${base}${url}`;
+    try {
+      const res = await fetch(fullURL, { cache: "no-store" });
+      const body = await res.json().catch(() => null);
+      if (res.ok) {
+        return body;
+      }
+      // On a static server (Five Server), /api/* usually returns 404 HTML.
+      if (res.status === 404) {
+        lastError = new Error("HTTP 404");
+        continue;
+      }
+      const details = body?.details || `HTTP ${res.status}`;
+      throw new Error(details);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error("API indisponible");
 }
 
 async function loadUserSuggestions(query) {

@@ -20,7 +20,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const terrariaAppID = 105600
+const defaultGlobalAppID = 105600 // Steam app ID (Terraria), used by /api/achievements legacy endpoint.
 const cacheTTL = 6 * time.Hour
 const appMetaCacheTTL = 24 * time.Hour
 
@@ -68,6 +68,12 @@ type UserSuggestion struct {
 	AvgCompletion float64 `json:"avgCompletion"`
 }
 
+type UserProfile struct {
+	SteamID     string `json:"steamId"`
+	DisplayName string `json:"displayName"`
+	AvatarURL   string `json:"avatarUrl"`
+}
+
 type Server struct {
 	db              *sql.DB
 	apiKey          string
@@ -112,6 +118,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/achievements", s.handleAchievements)
 	mux.HandleFunc("/api/users/suggestions", s.handleUserSuggestions)
+	mux.HandleFunc("/api/users/profile", s.handleUserProfile)
 	mux.HandleFunc("/api/users/games", s.handleUserGames)
 	mux.HandleFunc("/api/users/achievements", s.handleUserAchievements)
 
@@ -213,9 +220,10 @@ func (s *Server) initDB() error {
 }
 
 func (s *Server) handleUserGames(w http.ResponseWriter, r *http.Request) {
-	steamID := strings.TrimSpace(r.URL.Query().Get("steamId"))
-	if !isValidSteamID64(steamID) {
-		writeError(w, http.StatusBadRequest, "invalid_steam_id", "steamId must be a valid SteamID64")
+	identifier := strings.TrimSpace(r.URL.Query().Get("steamId"))
+	steamID, err := s.resolveSteamIDInput(identifier)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_user_identifier", "Entre un SteamID64 valide ou un pseudo deja present en base")
 		return
 	}
 
@@ -270,10 +278,42 @@ func (s *Server) handleUserSuggestions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, suggestions)
 }
 
+func (s *Server) handleUserProfile(w http.ResponseWriter, r *http.Request) {
+	identifier := strings.TrimSpace(r.URL.Query().Get("steamId"))
+	steamID, err := s.resolveSteamIDInput(identifier)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_user_identifier", "Entre un SteamID64 valide ou un pseudo deja present en base")
+		return
+	}
+
+	profile, err := s.readUserProfileFromDB(steamID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+
+	if profile.DisplayName == "" || profile.AvatarURL == "" {
+		summary, summaryErr := fetchPlayerSummary(s.apiKey, steamID)
+		if summaryErr == nil {
+			_ = s.upsertUserMetaValue(steamID, "profile_name", summary.DisplayName)
+			_ = s.upsertUserMetaValue(steamID, "profile_avatar", summary.AvatarURL)
+			profile = summary
+		}
+	}
+
+	profile.SteamID = steamID
+	if profile.DisplayName == "" {
+		profile.DisplayName = steamID
+	}
+
+	writeJSON(w, profile)
+}
+
 func (s *Server) handleUserAchievements(w http.ResponseWriter, r *http.Request) {
-	steamID := strings.TrimSpace(r.URL.Query().Get("steamId"))
-	if !isValidSteamID64(steamID) {
-		writeError(w, http.StatusBadRequest, "invalid_steam_id", "steamId must be a valid SteamID64")
+	identifier := strings.TrimSpace(r.URL.Query().Get("steamId"))
+	steamID, err := s.resolveSteamIDInput(identifier)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_user_identifier", "Entre un SteamID64 valide ou un pseudo deja present en base")
 		return
 	}
 
@@ -553,11 +593,92 @@ func (s *Server) readUserSuggestionsFromDB(query string, limit int) ([]UserSugge
 	return out, rows.Err()
 }
 
+func (s *Server) resolveSteamIDInput(raw string) (string, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return "", errors.New("empty user identifier")
+	}
+	if isValidSteamID64(v) {
+		return v, nil
+	}
+
+	rows, err := s.db.Query(`
+		SELECT steam_id
+		FROM user_meta
+		WHERE key='profile_name' AND LOWER(value)=LOWER(?)
+		LIMIT 2
+	`, v)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	matched := make([]string, 0, 2)
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return "", scanErr
+		}
+		matched = append(matched, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+
+	if len(matched) == 1 {
+		return matched[0], nil
+	}
+	if len(matched) > 1 {
+		return "", errors.New("ambiguous profile name")
+	}
+
+	return "", errors.New("unknown profile name")
+}
+
+func (s *Server) readUserProfileFromDB(steamID string) (UserProfile, error) {
+	profile := UserProfile{SteamID: steamID, DisplayName: steamID}
+
+	rows, err := s.db.Query(`
+		SELECT key, value
+		FROM user_meta
+		WHERE steam_id=? AND key IN ('profile_name', 'profile_avatar')
+	`, steamID)
+	if err != nil {
+		return profile, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return profile, err
+		}
+		switch key {
+		case "profile_name":
+			if strings.TrimSpace(value) != "" {
+				profile.DisplayName = strings.TrimSpace(value)
+			}
+		case "profile_avatar":
+			profile.AvatarURL = strings.TrimSpace(value)
+		}
+	}
+
+	return profile, rows.Err()
+}
+
+func (s *Server) upsertUserMetaValue(steamID string, key string, value string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO user_meta(steam_id,key,value) VALUES(?,?,?)
+		ON CONFLICT(steam_id,key) DO UPDATE SET value=excluded.value
+	`, steamID, key, value)
+	return err
+}
+
 func (s *Server) syncUserData(steamID string, lang string) error {
-	profileName, profileErr := fetchPlayerSummaryName(s.apiKey, steamID)
+	summary, profileErr := fetchPlayerSummary(s.apiKey, steamID)
 	if profileErr != nil {
 		log.Printf("profile summary warning (steamID=%s): %v", steamID, profileErr)
-		profileName = ""
+		summary = UserProfile{}
 	}
 
 	games, err := fetchOwnedGames(s.apiKey, steamID)
@@ -685,11 +806,20 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 		return err
 	}
 
-	if profileName != "" {
+	if strings.TrimSpace(summary.DisplayName) != "" {
 		if _, err := tx.Exec(`
 			INSERT INTO user_meta(steam_id,key,value) VALUES(?,?,?)
 			ON CONFLICT(steam_id,key) DO UPDATE SET value=excluded.value
-		`, steamID, "profile_name", profileName); err != nil {
+		`, steamID, "profile_name", summary.DisplayName); err != nil {
+			return err
+		}
+	}
+
+	if strings.TrimSpace(summary.AvatarURL) != "" {
+		if _, err := tx.Exec(`
+			INSERT INTO user_meta(steam_id,key,value) VALUES(?,?,?)
+			ON CONFLICT(steam_id,key) DO UPDATE SET value=excluded.value
+		`, steamID, "profile_avatar", summary.AvatarURL); err != nil {
 			return err
 		}
 	}
@@ -699,11 +829,11 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 
 func (s *Server) syncFromSteam(lang string) error {
 	// schema + global pcts
-	schema, err := fetchSchemaForGame(s.apiKey, terrariaAppID, lang)
+	schema, err := fetchSchemaForGame(s.apiKey, defaultGlobalAppID, lang)
 	if err != nil {
 		return err
 	}
-	pcts, err := fetchGlobalPercentages(terrariaAppID)
+	pcts, err := fetchGlobalPercentages(defaultGlobalAppID)
 	if err != nil {
 		return err
 	}
@@ -917,30 +1047,36 @@ func fetchOwnedGames(apiKey string, steamID string) ([]OwnedGame, error) {
 	return out, nil
 }
 
-func fetchPlayerSummaryName(apiKey string, steamID string) (string, error) {
+func fetchPlayerSummary(apiKey string, steamID string) (UserProfile, error) {
 	url := fmt.Sprintf("https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=%s&steamids=%s&format=json", apiKey, steamID)
 
 	body, err := httpGET(url)
 	if err != nil {
-		return "", err
+		return UserProfile{}, err
 	}
 
 	var resp struct {
 		Response struct {
 			Players []struct {
 				PersonaName string `json:"personaname"`
+				AvatarFull  string `json:"avatarfull"`
 			} `json:"players"`
 		} `json:"response"`
 	}
 
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", fmt.Errorf("player summary json parse: %w", err)
+		return UserProfile{}, fmt.Errorf("player summary json parse: %w", err)
 	}
 	if len(resp.Response.Players) == 0 {
-		return "", nil
+		return UserProfile{}, nil
 	}
 
-	return strings.TrimSpace(resp.Response.Players[0].PersonaName), nil
+	player := resp.Response.Players[0]
+	return UserProfile{
+		SteamID:     steamID,
+		DisplayName: strings.TrimSpace(player.PersonaName),
+		AvatarURL:   strings.TrimSpace(player.AvatarFull),
+	}, nil
 }
 
 type userAchievementState struct {
