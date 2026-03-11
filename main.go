@@ -188,25 +188,19 @@ func (s *Server) handleUserGames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expired, err := s.isUserCacheExpired(steamID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
-	}
-	if expired {
-		if err := s.syncUserData(steamID, "french"); err != nil {
-			if errors.Is(err, errProfilePrivate) {
-				writeError(w, http.StatusForbidden, "private_profile", "Profil prive ou statistiques inaccessibles pour ce SteamID")
-				return
-			}
-			if errors.Is(err, errInvalidSteamAPIKey) {
-				writeError(w, http.StatusBadGateway, "invalid_api_key", "Cle Steam API invalide ou mal configuree cote serveur")
-				return
-			}
-			log.Printf("steam sync error (games, steamID=%s): %v", steamID, err)
-			writeError(w, http.StatusBadGateway, "steam_sync_error", "Echec de synchronisation avec Steam")
+	// Toujours synchroniser les données avec Steam lors de la recherche
+	if err := s.syncUserData(steamID, "french"); err != nil {
+		if errors.Is(err, errProfilePrivate) {
+			writeError(w, http.StatusForbidden, "private_profile", "Profil prive ou statistiques inaccessibles pour ce SteamID")
 			return
 		}
+		if errors.Is(err, errInvalidSteamAPIKey) {
+			writeError(w, http.StatusBadGateway, "invalid_api_key", "Cle Steam API invalide ou mal configuree cote serveur")
+			return
+		}
+		log.Printf("steam sync error (games, steamID=%s): %v", steamID, err)
+		writeError(w, http.StatusBadGateway, "steam_sync_error", "Echec de synchronisation avec Steam")
+		return
 	}
 
 	games, err := s.readUserGamesFromDB(steamID)
@@ -231,25 +225,19 @@ func (s *Server) handleUserAchievements(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	expired, err := s.isUserCacheExpired(steamID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
-	}
-	if expired {
-		if err := s.syncUserData(steamID, "french"); err != nil {
-			if errors.Is(err, errProfilePrivate) {
-				writeError(w, http.StatusForbidden, "private_profile", "Profil prive ou statistiques inaccessibles pour ce SteamID")
-				return
-			}
-			if errors.Is(err, errInvalidSteamAPIKey) {
-				writeError(w, http.StatusBadGateway, "invalid_api_key", "Cle Steam API invalide ou mal configuree cote serveur")
-				return
-			}
-			log.Printf("steam sync error (achievements, steamID=%s, appID=%d): %v", steamID, appID, err)
-			writeError(w, http.StatusBadGateway, "steam_sync_error", "Echec de synchronisation avec Steam")
+	// Toujours synchroniser les données avec Steam lors de la recherche
+	if err := s.syncUserData(steamID, "french"); err != nil {
+		if errors.Is(err, errProfilePrivate) {
+			writeError(w, http.StatusForbidden, "private_profile", "Profil prive ou statistiques inaccessibles pour ce SteamID")
 			return
 		}
+		if errors.Is(err, errInvalidSteamAPIKey) {
+			writeError(w, http.StatusBadGateway, "invalid_api_key", "Cle Steam API invalide ou mal configuree cote serveur")
+			return
+		}
+		log.Printf("steam sync error (achievements, steamID=%s, appID=%d): %v", steamID, appID, err)
+		writeError(w, http.StatusBadGateway, "steam_sync_error", "Echec de synchronisation avec Steam")
+		return
 	}
 
 	items, err := s.readUserAchievementsFromDB(steamID, appID)
