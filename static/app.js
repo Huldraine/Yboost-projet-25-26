@@ -78,12 +78,16 @@ async function loadGames(forceRefresh = false) {
   els.status.textContent = "Chargement des jeux...";
   els.count.textContent = "";
   if (forceRefresh) {
-    // Bust browser cache only; backend cache still controls Steam sync frequency.
+    // Keep SteamID normalized when forcing refresh.
     currentSteamID = currentSteamID.trim();
   }
 
   try {
-    const games = await getJSON(`/api/users/games?steamId=${encodeURIComponent(currentSteamID)}`);
+    const qs = new URLSearchParams({ steamId: currentSteamID });
+    if (forceRefresh) {
+      qs.set("refresh", "1");
+    }
+    const games = await getJSON(`/api/users/games?${qs.toString()}`);
     allGames = Array.isArray(games) ? games : [];
     renderGames();
     els.status.textContent = "Jeux charges";

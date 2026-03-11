@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -21,6 +22,17 @@ import (
 
 const terrariaAppID = 105600
 const cacheTTL = 6 * time.Hour
+const appMetaCacheTTL = 24 * time.Hour
+
+type appSchemaCacheEntry struct {
+	items     []Achievement
+	fetchedAt time.Time
+}
+
+type appGlobalPctCacheEntry struct {
+	items     map[string]float64
+	fetchedAt time.Time
+}
 
 type Achievement struct {
 	APIName     string  `json:"apiName"`
@@ -50,8 +62,11 @@ type GameCompletion struct {
 }
 
 type Server struct {
-	db     *sql.DB
-	apiKey string
+	db              *sql.DB
+	apiKey          string
+	cacheMu         sync.RWMutex
+	appSchemaCache  map[int]appSchemaCacheEntry
+	appGlobalPctMap map[int]appGlobalPctCacheEntry
 }
 
 var errProfilePrivate = errors.New("steam profile is private or stats unavailable")
@@ -71,9 +86,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// SQLite is file-based; one shared connection avoids writer lock contention.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	defer db.Close()
 
-	s := &Server{db: db, apiKey: apiKey}
+	s := &Server{
+		db:              db,
+		apiKey:          apiKey,
+		appSchemaCache:  make(map[int]appSchemaCacheEntry),
+		appGlobalPctMap: make(map[int]appGlobalPctCacheEntry),
+	}
 
 	if err := s.initDB(); err != nil {
 		log.Fatal(err)
@@ -188,19 +211,35 @@ func (s *Server) handleUserGames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Toujours synchroniser les données avec Steam lors de la recherche
-	if err := s.syncUserData(steamID, "french"); err != nil {
-		if errors.Is(err, errProfilePrivate) {
-			writeError(w, http.StatusForbidden, "private_profile", "Profil prive ou statistiques inaccessibles pour ce SteamID")
-			return
-		}
-		if errors.Is(err, errInvalidSteamAPIKey) {
-			writeError(w, http.StatusBadGateway, "invalid_api_key", "Cle Steam API invalide ou mal configuree cote serveur")
-			return
-		}
-		log.Printf("steam sync error (games, steamID=%s): %v", steamID, err)
-		writeError(w, http.StatusBadGateway, "steam_sync_error", "Echec de synchronisation avec Steam")
+	forceRefresh := shouldForceRefresh(r)
+	expired, err := s.isUserCacheExpired(steamID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
+	}
+
+	if forceRefresh || expired {
+		if err := s.syncUserData(steamID, "french"); err != nil {
+			cachedGames, readErr := s.readUserGamesFromDB(steamID)
+			if readErr == nil && len(cachedGames) > 0 {
+				log.Printf("steam sync warning (games, steamID=%s): %v (serving cached data)", steamID, err)
+				w.Header().Set("X-Data-Stale", "1")
+				writeJSON(w, cachedGames)
+				return
+			}
+
+			if errors.Is(err, errProfilePrivate) {
+				writeError(w, http.StatusForbidden, "private_profile", "Profil prive ou statistiques inaccessibles pour ce SteamID")
+				return
+			}
+			if errors.Is(err, errInvalidSteamAPIKey) {
+				writeError(w, http.StatusBadGateway, "invalid_api_key", "Cle Steam API invalide ou mal configuree cote serveur")
+				return
+			}
+			log.Printf("steam sync error (games, steamID=%s): %v", steamID, err)
+			writeError(w, http.StatusBadGateway, "steam_sync_error", "Echec de synchronisation avec Steam")
+			return
+		}
 	}
 
 	games, err := s.readUserGamesFromDB(steamID)
@@ -225,19 +264,35 @@ func (s *Server) handleUserAchievements(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Toujours synchroniser les données avec Steam lors de la recherche
-	if err := s.syncUserData(steamID, "french"); err != nil {
-		if errors.Is(err, errProfilePrivate) {
-			writeError(w, http.StatusForbidden, "private_profile", "Profil prive ou statistiques inaccessibles pour ce SteamID")
-			return
-		}
-		if errors.Is(err, errInvalidSteamAPIKey) {
-			writeError(w, http.StatusBadGateway, "invalid_api_key", "Cle Steam API invalide ou mal configuree cote serveur")
-			return
-		}
-		log.Printf("steam sync error (achievements, steamID=%s, appID=%d): %v", steamID, appID, err)
-		writeError(w, http.StatusBadGateway, "steam_sync_error", "Echec de synchronisation avec Steam")
+	forceRefresh := shouldForceRefresh(r)
+	expired, err := s.isUserCacheExpired(steamID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
+	}
+
+	if forceRefresh || expired {
+		if err := s.syncUserData(steamID, "french"); err != nil {
+			cachedItems, readErr := s.readUserAchievementsFromDB(steamID, appID)
+			if readErr == nil && len(cachedItems) > 0 {
+				log.Printf("steam sync warning (achievements, steamID=%s, appID=%d): %v (serving cached data)", steamID, appID, err)
+				w.Header().Set("X-Data-Stale", "1")
+				writeJSON(w, cachedItems)
+				return
+			}
+
+			if errors.Is(err, errProfilePrivate) {
+				writeError(w, http.StatusForbidden, "private_profile", "Profil prive ou statistiques inaccessibles pour ce SteamID")
+				return
+			}
+			if errors.Is(err, errInvalidSteamAPIKey) {
+				writeError(w, http.StatusBadGateway, "invalid_api_key", "Cle Steam API invalide ou mal configuree cote serveur")
+				return
+			}
+			log.Printf("steam sync error (achievements, steamID=%s, appID=%d): %v", steamID, appID, err)
+			writeError(w, http.StatusBadGateway, "steam_sync_error", "Echec de synchronisation avec Steam")
+			return
+		}
 	}
 
 	items, err := s.readUserAchievementsFromDB(steamID, appID)
@@ -303,6 +358,11 @@ func isValidSteamID64(v string) bool {
 	}
 	_, err := strconv.ParseUint(v, 10, 64)
 	return err == nil
+}
+
+func shouldForceRefresh(r *http.Request) bool {
+	v := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("refresh")))
+	return v == "1" || v == "true" || v == "yes"
 }
 
 func (s *Server) isCacheExpired() (bool, error) {
@@ -475,7 +535,7 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 
 	now := time.Now().Unix()
 	for _, game := range games {
-		schema, err := fetchSchemaForGame(s.apiKey, game.AppID, lang)
+		schema, err := s.fetchSchemaForGameCached(game.AppID, lang)
 		if err != nil {
 			log.Printf("skip schema app %d (%s): %v", game.AppID, game.Name, err)
 			continue
@@ -484,7 +544,7 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 			continue
 		}
 
-		pcts, err := fetchGlobalPercentages(game.AppID)
+		pcts, err := s.fetchGlobalPercentagesCached(game.AppID)
 		if err != nil {
 			log.Printf("skip global pct app %d (%s): %v", game.AppID, game.Name, err)
 			pcts = map[string]float64{}
@@ -630,6 +690,50 @@ func (s *Server) syncFromSteam(lang string) error {
 	}
 
 	return tx.Commit()
+}
+
+func (s *Server) fetchSchemaForGameCached(appID int, lang string) ([]Achievement, error) {
+	now := time.Now()
+
+	s.cacheMu.RLock()
+	entry, ok := s.appSchemaCache[appID]
+	s.cacheMu.RUnlock()
+	if ok && now.Sub(entry.fetchedAt) <= appMetaCacheTTL {
+		return entry.items, nil
+	}
+
+	items, err := fetchSchemaForGame(s.apiKey, appID, lang)
+	if err != nil {
+		return nil, err
+	}
+
+	s.cacheMu.Lock()
+	s.appSchemaCache[appID] = appSchemaCacheEntry{items: items, fetchedAt: now}
+	s.cacheMu.Unlock()
+
+	return items, nil
+}
+
+func (s *Server) fetchGlobalPercentagesCached(appID int) (map[string]float64, error) {
+	now := time.Now()
+
+	s.cacheMu.RLock()
+	entry, ok := s.appGlobalPctMap[appID]
+	s.cacheMu.RUnlock()
+	if ok && now.Sub(entry.fetchedAt) <= appMetaCacheTTL {
+		return entry.items, nil
+	}
+
+	items, err := fetchGlobalPercentages(appID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.cacheMu.Lock()
+	s.appGlobalPctMap[appID] = appGlobalPctCacheEntry{items: items, fetchedAt: now}
+	s.cacheMu.Unlock()
+
+	return items, nil
 }
 
 /***************
