@@ -1,2 +1,4 @@
 .env
-db.go
+*.db
+*.db-shm
+*.db-wal
