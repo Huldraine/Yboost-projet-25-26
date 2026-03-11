@@ -45,6 +45,42 @@ header h1 { margin: 0 0 6px; font-size: 29px; letter-spacing: 0.02em; }
   margin-bottom: 10px;
 }
 
+.profileCard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03));
+  margin-bottom: 10px;
+}
+
+.profileAvatar {
+  width: 54px;
+  height: 54px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(0,0,0,.25);
+  object-fit: cover;
+}
+
+.profileInfo {
+  min-width: 0;
+}
+
+.profileName {
+  margin: 0;
+  font-weight: 700;
+}
+
+.profileSteamId {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+}
+
 .controls {
   display: grid;
   grid-template-columns: 1fr 170px 160px 170px;
