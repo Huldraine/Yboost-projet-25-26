@@ -55,13 +55,14 @@ type Server struct {
 }
 
 var errProfilePrivate = errors.New("steam profile is private or stats unavailable")
+var errInvalidSteamAPIKey = errors.New("invalid steam api key")
 
 func main() {
 	_ = godotenv.Load() // charge .env si présent
 
 	port := getenv("PORT", "8080")
 	dbPath := getenv("DB_PATH", "terraria.db")
-	apiKey := os.Getenv("STEAM_API_KEY")
+	apiKey := cleanEnvValue(os.Getenv("STEAM_API_KEY"))
 	if apiKey == "" {
 		log.Fatal("STEAM_API_KEY manquant (mets-le dans .env)")
 	}
@@ -96,6 +97,12 @@ func getenv(k, def string) string {
 		return v
 	}
 	return def
+}
+
+func cleanEnvValue(v string) string {
+	v = strings.TrimSpace(v)
+	v = strings.Trim(v, "\"'")
+	return v
 }
 
 func withCORS(next http.Handler) http.Handler {
@@ -192,6 +199,10 @@ func (s *Server) handleUserGames(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusForbidden, "private_profile", "Profil prive ou statistiques inaccessibles pour ce SteamID")
 				return
 			}
+			if errors.Is(err, errInvalidSteamAPIKey) {
+				writeError(w, http.StatusBadGateway, "invalid_api_key", "Cle Steam API invalide ou mal configuree cote serveur")
+				return
+			}
 			log.Printf("steam sync error (games, steamID=%s): %v", steamID, err)
 			writeError(w, http.StatusBadGateway, "steam_sync_error", "Echec de synchronisation avec Steam")
 			return
@@ -229,6 +240,10 @@ func (s *Server) handleUserAchievements(w http.ResponseWriter, r *http.Request) 
 		if err := s.syncUserData(steamID, "french"); err != nil {
 			if errors.Is(err, errProfilePrivate) {
 				writeError(w, http.StatusForbidden, "private_profile", "Profil prive ou statistiques inaccessibles pour ce SteamID")
+				return
+			}
+			if errors.Is(err, errInvalidSteamAPIKey) {
+				writeError(w, http.StatusBadGateway, "invalid_api_key", "Cle Steam API invalide ou mal configuree cote serveur")
 				return
 			}
 			log.Printf("steam sync error (achievements, steamID=%s, appID=%d): %v", steamID, appID, err)
@@ -707,8 +722,8 @@ func fetchOwnedGames(apiKey string, steamID string) ([]OwnedGame, error) {
 
 	body, status, err := httpGETWithStatus(url)
 	if err != nil {
-		if status == http.StatusForbidden {
-			return nil, errProfilePrivate
+		if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			return nil, errInvalidSteamAPIKey
 		}
 		return nil, err
 	}
