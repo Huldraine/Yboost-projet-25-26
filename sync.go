@@ -30,41 +30,85 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`DELETE FROM user_achievements WHERE steam_id=?`, steamID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM user_games WHERE steam_id=?`, steamID); err != nil {
-		return err
-	}
-
-	gameStmt, err := tx.Prepare(`
-		INSERT INTO user_games(steam_id, app_id, name, playtime_forever, total_achievements, unlocked_achievements, completion_pct, updated_at)
-		VALUES(?,?,?,?,?,?,?,?)
-	`)
-	if err != nil {
-		return err
-	}
-	defer gameStmt.Close()
-
-	achStmt, err := tx.Prepare(`
-		INSERT INTO user_achievements(steam_id, app_id, api_name, name, description, icon, icon_gray, hidden, achieved, unlock_time, global_pct, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-	`)
-	if err != nil {
-		return err
-	}
-	defer achStmt.Close()
-
 	now := time.Now().Unix()
-	totalGames := 0
-	completionSum := 0.0
+
+	appSyncTs := make(map[int]int64)
+	syncRows, err := tx.Query(`
+		SELECT key, value
+		FROM user_meta
+		WHERE steam_id=? AND key LIKE 'last_sync_app_%'
+	`, steamID)
+	if err != nil {
+		return err
+	}
+	for syncRows.Next() {
+		var key, value string
+		if err := syncRows.Scan(&key, &value); err != nil {
+			syncRows.Close()
+			return err
+		}
+		appPart := strings.TrimPrefix(key, "last_sync_app_")
+		appID, appErr := strconv.Atoi(appPart)
+		sec, secErr := strconv.ParseInt(value, 10, 64)
+		if appErr == nil && secErr == nil && appID > 0 {
+			appSyncTs[appID] = sec
+		}
+	}
+	if err := syncRows.Err(); err != nil {
+		syncRows.Close()
+		return err
+	}
+	syncRows.Close()
+
+	existingApps := make(map[int]struct{})
+	existingRows, err := tx.Query(`SELECT app_id FROM user_games WHERE steam_id=?`, steamID)
+	if err != nil {
+		return err
+	}
+	for existingRows.Next() {
+		var appID int
+		if err := existingRows.Scan(&appID); err != nil {
+			existingRows.Close()
+			return err
+		}
+		existingApps[appID] = struct{}{}
+	}
+	if err := existingRows.Err(); err != nil {
+		existingRows.Close()
+		return err
+	}
+	existingRows.Close()
+
+	seenApps := make(map[int]struct{}, len(games))
 	for _, game := range games {
+		seenApps[game.AppID] = struct{}{}
+
+		if sec, ok := appSyncTs[game.AppID]; ok && time.Since(time.Unix(sec, 0)) <= cacheTTL {
+			if _, err := tx.Exec(`
+				UPDATE user_games
+				SET name=?, playtime_forever=?
+				WHERE steam_id=? AND app_id=?
+			`, game.Name, game.PlaytimeForever, steamID, game.AppID); err != nil {
+				return err
+			}
+			continue
+		}
+
 		schema, err := s.fetchSchemaForGameCached(game.AppID, lang)
 		if err != nil {
 			log.Printf("skip schema app %d (%s): %v", game.AppID, game.Name, err)
 			continue
 		}
 		if len(schema) == 0 {
+			if _, err := tx.Exec(`DELETE FROM user_achievements WHERE steam_id=? AND app_id=?`, steamID, game.AppID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`DELETE FROM user_games WHERE steam_id=? AND app_id=?`, steamID, game.AppID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`DELETE FROM user_meta WHERE steam_id=? AND key=?`, steamID, "last_sync_app_"+strconv.Itoa(game.AppID)); err != nil {
+				return err
+			}
 			continue
 		}
 
@@ -84,6 +128,9 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 		}
 
 		unlockedCount := 0
+		if _, err := tx.Exec(`DELETE FROM user_achievements WHERE steam_id=? AND app_id=?`, steamID, game.AppID); err != nil {
+			return err
+		}
 		for _, a := range schema {
 			st, ok := userStats[a.APIName]
 			if st.Achieved {
@@ -99,7 +146,10 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 				achieved = 1
 			}
 
-			if _, err := achStmt.Exec(
+			if _, err := tx.Exec(`
+				INSERT INTO user_achievements(steam_id, app_id, api_name, name, description, icon, icon_gray, hidden, achieved, unlock_time, global_pct, updated_at)
+				VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+			`,
 				steamID,
 				game.AppID,
 				a.APIName,
@@ -122,7 +172,17 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 			completion = float64(unlockedCount) * 100.0 / float64(len(schema))
 		}
 
-		if _, err := gameStmt.Exec(
+		if _, err := tx.Exec(`
+			INSERT INTO user_games(steam_id, app_id, name, playtime_forever, total_achievements, unlocked_achievements, completion_pct, updated_at)
+			VALUES(?,?,?,?,?,?,?,?)
+			ON CONFLICT(steam_id, app_id) DO UPDATE SET
+				name=excluded.name,
+				playtime_forever=excluded.playtime_forever,
+				total_achievements=excluded.total_achievements,
+				unlocked_achievements=excluded.unlocked_achievements,
+				completion_pct=excluded.completion_pct,
+				updated_at=excluded.updated_at
+		`,
 			steamID,
 			game.AppID,
 			game.Name,
@@ -135,23 +195,40 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 			return err
 		}
 
-		totalGames++
-		completionSum += completion
+		if _, err := tx.Exec(`
+			INSERT INTO user_meta(steam_id,key,value) VALUES(?,?,?)
+			ON CONFLICT(steam_id,key) DO UPDATE SET value=excluded.value
+		`, steamID, "last_sync_app_"+strconv.Itoa(game.AppID), strconv.FormatInt(now, 10)); err != nil {
+			return err
+		}
 	}
 
-	avgCompletion := 0.0
-	if totalGames > 0 {
-		avgCompletion = completionSum / float64(totalGames)
+	for appID := range existingApps {
+		if _, ok := seenApps[appID]; ok {
+			continue
+		}
+		if _, err := tx.Exec(`DELETE FROM user_achievements WHERE steam_id=? AND app_id=?`, steamID, appID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM user_games WHERE steam_id=? AND app_id=?`, steamID, appID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM user_meta WHERE steam_id=? AND key=?`, steamID, "last_sync_app_"+strconv.Itoa(appID)); err != nil {
+			return err
+		}
 	}
 
 	if _, err := tx.Exec(`
 		INSERT INTO user_stats(steam_id, games_count, avg_completion, updated_at)
-		VALUES(?,?,?,?)
+		SELECT steam_id, COUNT(*), COALESCE(AVG(completion_pct), 0.0), ?
+		FROM user_games
+		WHERE steam_id=?
+		GROUP BY steam_id
 		ON CONFLICT(steam_id) DO UPDATE SET
 			games_count=excluded.games_count,
 			avg_completion=excluded.avg_completion,
 			updated_at=excluded.updated_at
-	`, steamID, totalGames, avgCompletion, now); err != nil {
+	`, now, steamID); err != nil {
 		return err
 	}
 
