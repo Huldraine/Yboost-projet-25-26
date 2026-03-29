@@ -17,6 +17,7 @@ func main() {
 	port := getenv("PORT", "8080")
 	dbPath := getenv("DB_PATH", "steam_achievements.db")
 	apiKey := cleanEnvValue(os.Getenv("STEAM_API_KEY"))
+	supabaseDSN := cleanEnvValue(getenv("SUPABASE_DB_URL", getenv("DATABASE_URL", "")))
 	if apiKey == "" {
 		log.Fatal("STEAM_API_KEY manquant (mets-le dans .env)")
 	}
@@ -37,6 +38,17 @@ func main() {
 		appGlobalPctMap: make(map[int]appGlobalPctCacheEntry),
 	}
 
+	store, err := newSupabaseStore(supabaseDSN)
+	if err != nil {
+		log.Fatalf("supabase init error: %v", err)
+	}
+	s.supabase = store
+	if s.supabase != nil && s.supabase.isEnabled() {
+		log.Printf("Supabase ORM active")
+	} else {
+		log.Printf("Supabase ORM inactive (SUPABASE_DB_URL/DATABASE_URL absent)")
+	}
+
 	if err := s.initDB(); err != nil {
 		log.Fatal(err)
 	}
@@ -47,6 +59,8 @@ func main() {
 	mux.HandleFunc("/api/users/profile", s.handleUserProfile)
 	mux.HandleFunc("/api/users/games", s.handleUserGames)
 	mux.HandleFunc("/api/users/achievements", s.handleUserAchievements)
+	mux.HandleFunc("/api/crud/users", s.handleTrackedUsers)
+	mux.HandleFunc("/api/crud/users/", s.handleTrackedUserByID)
 
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 

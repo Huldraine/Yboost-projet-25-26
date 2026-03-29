@@ -64,6 +64,7 @@ type UserProfile struct {
 type Server struct {
 	db              *sql.DB
 	apiKey          string
+	supabase        *SupabaseStore
 	cacheMu         sync.RWMutex
 	appSchemaCache  map[int]appSchemaCacheEntry
 	appGlobalPctMap map[int]appGlobalPctCacheEntry
