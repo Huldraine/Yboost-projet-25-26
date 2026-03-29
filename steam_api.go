@@ -11,6 +11,16 @@ import (
 	"time"
 )
 
+var steamHTTPClient = &http.Client{
+	Timeout: 12 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     90 * time.Second,
+		ForceAttemptHTTP2:   true,
+	},
+}
+
 func fetchSchemaForGame(apiKey string, appid int, lang string) ([]Achievement, error) {
 	url := fmt.Sprintf("https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/?key=%s&appid=%d&l=%s&format=json",
 		apiKey, appid, lang)
@@ -194,8 +204,7 @@ func httpGET(url string) ([]byte, error) {
 }
 
 func httpGETWithStatus(url string) ([]byte, int, error) {
-	client := &http.Client{Timeout: 12 * time.Second}
-	res, err := client.Get(url)
+	res, err := steamHTTPClient.Get(url)
 	if err != nil {
 		return nil, 0, err
 	}

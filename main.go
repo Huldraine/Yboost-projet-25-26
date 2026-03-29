@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	_ "modernc.org/sqlite"
@@ -64,11 +65,18 @@ func main() {
 	mux.HandleFunc("/api/crud/users", s.handleTrackedUsers)
 	mux.HandleFunc("/api/crud/users/", s.handleTrackedUserByID)
 
-	mux.Handle("/", http.FileServer(http.Dir("./static")))
+	mux.Handle("/", withStaticCache(http.FileServer(http.Dir("./static"))))
 
 	addr := ":" + port
 	log.Printf("Listening on %s (db=%s)", addr, dbPath)
-	log.Fatal(http.ListenAndServe(addr, withCORS(mux)))
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           withCORS(withCompression(mux)),
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       90 * time.Second,
+	}
+	log.Fatal(server.ListenAndServe())
 }
 
 func getenv(k, def string) string {
