@@ -56,6 +56,8 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 	defer achStmt.Close()
 
 	now := time.Now().Unix()
+	totalGames := 0
+	completionSum := 0.0
 	for _, game := range games {
 		schema, err := s.fetchSchemaForGameCached(game.AppID, lang)
 		if err != nil {
@@ -132,6 +134,25 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 		); err != nil {
 			return err
 		}
+
+		totalGames++
+		completionSum += completion
+	}
+
+	avgCompletion := 0.0
+	if totalGames > 0 {
+		avgCompletion = completionSum / float64(totalGames)
+	}
+
+	if _, err := tx.Exec(`
+		INSERT INTO user_stats(steam_id, games_count, avg_completion, updated_at)
+		VALUES(?,?,?,?)
+		ON CONFLICT(steam_id) DO UPDATE SET
+			games_count=excluded.games_count,
+			avg_completion=excluded.avg_completion,
+			updated_at=excluded.updated_at
+	`, steamID, totalGames, avgCompletion, now); err != nil {
+		return err
 	}
 
 	if _, err := tx.Exec(`

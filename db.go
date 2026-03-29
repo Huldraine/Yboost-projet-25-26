@@ -60,8 +60,24 @@ func (s *Server) initDB() error {
 			value TEXT NOT NULL,
 			PRIMARY KEY(steam_id, key)
 		);`,
+		`CREATE TABLE IF NOT EXISTS user_stats (
+			steam_id TEXT PRIMARY KEY,
+			games_count INTEGER NOT NULL DEFAULT 0,
+			avg_completion REAL NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_user_games_steam_id ON user_games(steam_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_user_achievements_steam_app ON user_achievements(steam_id, app_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_user_meta_key_value ON user_meta(key, value);`,
+		`CREATE INDEX IF NOT EXISTS idx_user_stats_rank ON user_stats(games_count DESC, avg_completion DESC);`,
+		`INSERT INTO user_stats(steam_id, games_count, avg_completion, updated_at)
+		 SELECT steam_id, COUNT(*), COALESCE(AVG(completion_pct), 0.0), strftime('%s','now')
+		 FROM user_games
+		 GROUP BY steam_id
+		 ON CONFLICT(steam_id) DO UPDATE SET
+		 	games_count=excluded.games_count,
+		 	avg_completion=excluded.avg_completion,
+		 	updated_at=excluded.updated_at;`,
 	}
 	for _, q := range stmts {
 		if _, err := s.db.Exec(q); err != nil {
@@ -196,23 +212,23 @@ func (s *Server) readUserSuggestionsFromDB(query string, limit int) ([]UserSugge
 		limit = 12
 	}
 
+	q := strings.ToLower(strings.TrimSpace(query))
 	like := "%"
-	if query != "" {
-		like = "%" + strings.ToLower(query) + "%"
+	if q != "" {
+		like = "%" + q + "%"
 	}
 
 	rows, err := s.db.Query(`
 		SELECT
-			u.steam_id,
-			COALESCE(pname.value, u.steam_id) AS display_name,
-			COUNT(*) AS games_count,
-			COALESCE(AVG(u.completion_pct), 0.0) AS avg_completion
-		FROM user_games u
+			s.steam_id,
+			COALESCE(pname.value, s.steam_id) AS display_name,
+			s.games_count,
+			s.avg_completion
+		FROM user_stats s
 		LEFT JOIN user_meta pname
-			ON pname.steam_id = u.steam_id AND pname.key = 'profile_name'
-		WHERE (? = '%' OR LOWER(u.steam_id) LIKE ? OR LOWER(COALESCE(pname.value, '')) LIKE ?)
-		GROUP BY u.steam_id, display_name
-		ORDER BY games_count DESC, avg_completion DESC, display_name ASC
+			ON pname.steam_id = s.steam_id AND pname.key = 'profile_name'
+		WHERE (? = '%' OR LOWER(s.steam_id) LIKE ? OR LOWER(COALESCE(pname.value, '')) LIKE ?)
+		ORDER BY s.games_count DESC, s.avg_completion DESC, display_name ASC
 		LIMIT ?
 	`, like, like, like, limit)
 	if err != nil {

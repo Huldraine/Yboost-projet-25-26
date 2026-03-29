@@ -5,6 +5,7 @@ let currentGameName = "";
 let suggestionByValue = new Map();
 let suggestionsByName = new Map();
 let suggestionsTimer = null;
+let lastSuggestionQuery = "";
 const API_FALLBACKS = ["http://127.0.0.1:8099", "http://localhost:8099"];
 
 const els = {
@@ -114,6 +115,13 @@ async function getJSON(url) {
 
 async function loadUserSuggestions(query) {
   const q = String(query || "").trim();
+  if (q.length > 0 && q.length < 2) {
+    return;
+  }
+  if (q === lastSuggestionQuery) {
+    return;
+  }
+  lastSuggestionQuery = q;
 
   try {
     const rows = await getJSON(`/api/users/suggestions?q=${encodeURIComponent(q)}`);
@@ -421,7 +429,7 @@ els.steamId.addEventListener("input", () => {
   }
   suggestionsTimer = setTimeout(() => {
     loadUserSuggestions(els.steamId.value);
-  }, 220);
+  }, 320);
 });
 
 els.steamId.addEventListener("focus", () => {
