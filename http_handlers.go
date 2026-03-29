@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -81,6 +82,16 @@ func (s *Server) handleUserGames(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if forceRefresh || expired {
+		if !forceRefresh {
+			cachedGames, readErr := s.readUserGamesFromDB(steamID)
+			if readErr == nil && len(cachedGames) > 0 {
+				s.scheduleUserFullSync(steamID, "french")
+				w.Header().Set("X-Data-Stale", "1")
+				writeJSON(w, cachedGames)
+				return
+			}
+		}
+
 		if err := s.syncUserData(steamID, "french"); err != nil {
 			cachedGames, readErr := s.readUserGamesFromDB(steamID)
 			if readErr == nil && len(cachedGames) > 0 {
@@ -177,6 +188,16 @@ func (s *Server) handleUserAchievements(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if forceRefresh || expired {
+		if !forceRefresh {
+			cachedItems, readErr := s.readUserAchievementsFromDB(steamID, appID)
+			if readErr == nil && len(cachedItems) > 0 {
+				s.scheduleUserGameSync(steamID, appID, "french")
+				w.Header().Set("X-Data-Stale", "1")
+				writeJSON(w, cachedItems)
+				return
+			}
+		}
+
 		if err := s.syncUserGameData(steamID, appID, "french"); err != nil {
 			cachedItems, readErr := s.readUserAchievementsFromDB(steamID, appID)
 			if readErr == nil && len(cachedItems) > 0 {
@@ -263,4 +284,48 @@ func isValidSteamID64(v string) bool {
 func shouldForceRefresh(r *http.Request) bool {
 	v := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("refresh")))
 	return v == "1" || v == "true" || v == "yes"
+}
+
+func (s *Server) scheduleUserFullSync(steamID string, lang string) {
+	key := "full:" + steamID
+	if !s.beginSyncJob(key) {
+		return
+	}
+
+	go func() {
+		defer s.endSyncJob(key)
+		if err := s.syncUserData(steamID, lang); err != nil {
+			log.Printf("background full sync error (steamID=%s): %v", steamID, err)
+		}
+	}()
+}
+
+func (s *Server) scheduleUserGameSync(steamID string, appID int, lang string) {
+	key := fmt.Sprintf("game:%s:%d", steamID, appID)
+	if !s.beginSyncJob(key) {
+		return
+	}
+
+	go func() {
+		defer s.endSyncJob(key)
+		if err := s.syncUserGameData(steamID, appID, lang); err != nil {
+			log.Printf("background game sync error (steamID=%s, appID=%d): %v", steamID, appID, err)
+		}
+	}()
+}
+
+func (s *Server) beginSyncJob(key string) bool {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if s.inFlightSync[key] {
+		return false
+	}
+	s.inFlightSync[key] = true
+	return true
+}
+
+func (s *Server) endSyncJob(key string) {
+	s.syncMu.Lock()
+	delete(s.inFlightSync, key)
+	s.syncMu.Unlock()
 }

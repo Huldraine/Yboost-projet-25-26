@@ -68,6 +68,8 @@ type Server struct {
 	cacheMu         sync.RWMutex
 	appSchemaCache  map[int]appSchemaCacheEntry
 	appGlobalPctMap map[int]appGlobalPctCacheEntry
+	syncMu          sync.Mutex
+	inFlightSync    map[string]bool
 }
 
 type userAchievementState struct {

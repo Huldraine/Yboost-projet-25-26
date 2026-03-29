@@ -37,6 +37,7 @@ func main() {
 		apiKey:          apiKey,
 		appSchemaCache:  make(map[int]appSchemaCacheEntry),
 		appGlobalPctMap: make(map[int]appGlobalPctCacheEntry),
+		inFlightSync:    make(map[string]bool),
 	}
 
 	store, err := newSupabaseStore(supabaseDSN)

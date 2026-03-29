@@ -67,6 +67,14 @@ function formatSuggestionLabel(item) {
   return `${name} (${item.steamId})`;
 }
 
+function getSteamGameImageURL(appId) {
+  const id = Number(appId);
+  if (!Number.isFinite(id) || id <= 0) {
+    return "";
+  }
+  return `https://cdn.cloudflare.steamstatic.com/steam/apps/${id}/header.jpg`;
+}
+
 async function getJSON(url) {
   const isApiPath = typeof url === "string" && url.startsWith("/api/");
   if (!isApiPath) {
@@ -324,9 +332,13 @@ function renderGames() {
     const pct = (g.completionPct ?? 0).toFixed(2);
     const unlocked = g.unlockedAchievements ?? 0;
     const total = g.totalAchievements ?? 0;
+    const cover = getSteamGameImageURL(g.appId);
 
     return `
       <article class="card gameCard">
+        <div class="gameMediaWrap">
+          <img class="gameMedia" src="${esc(cover)}" alt="Illustration du jeu ${esc(g.name || `App ${g.appId}`)}" loading="lazy" onerror="this.style.display='none'; this.parentElement.classList.add('noImage');" />
+        </div>
         <div class="body">
           <div class="topline">
             <h3 class="title">${esc(g.name || `App ${g.appId}`)}</h3>
