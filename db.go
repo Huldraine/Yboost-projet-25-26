@@ -131,6 +131,29 @@ func (s *Server) isUserCacheExpired(steamID string) (bool, error) {
 	return time.Since(time.Unix(sec, 0)) > cacheTTL, nil
 }
 
+func (s *Server) isUserGameCacheExpired(steamID string, appID int) (bool, error) {
+	if appID <= 0 {
+		return true, nil
+	}
+
+	key := "last_sync_app_" + strconv.Itoa(appID)
+	var v string
+	err := s.db.QueryRow(`SELECT value FROM user_meta WHERE steam_id=? AND key=?`, steamID, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return true, err
+	}
+
+	sec, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return true, nil
+	}
+
+	return time.Since(time.Unix(sec, 0)) > cacheTTL, nil
+}
+
 func (s *Server) readAchievementsFromDB() ([]Achievement, error) {
 	rows, err := s.db.Query(`
 		SELECT a.api_name, a.name, a.description, a.icon, a.icon_gray, a.hidden,

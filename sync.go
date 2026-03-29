@@ -183,6 +183,173 @@ func (s *Server) syncUserData(steamID string, lang string) error {
 	return tx.Commit()
 }
 
+func (s *Server) syncUserGameData(steamID string, appID int, lang string) error {
+	if appID <= 0 {
+		return fmt.Errorf("invalid app id")
+	}
+
+	summary, profileErr := fetchPlayerSummary(s.apiKey, steamID)
+	if profileErr != nil {
+		log.Printf("profile summary warning (steamID=%s): %v", steamID, profileErr)
+		summary = UserProfile{}
+	}
+
+	games, err := fetchOwnedGames(s.apiKey, steamID)
+	if err != nil {
+		if errors.Is(err, errProfilePrivate) {
+			return err
+		}
+		return fmt.Errorf("owned games fetch: %w", err)
+	}
+
+	var target OwnedGame
+	found := false
+	for _, g := range games {
+		if g.AppID == appID {
+			target = g
+			found = true
+			break
+		}
+	}
+
+	schema, err := s.fetchSchemaForGameCached(appID, lang)
+	if err != nil {
+		return fmt.Errorf("schema fetch: %w", err)
+	}
+
+	pcts, err := s.fetchGlobalPercentagesCached(appID)
+	if err != nil {
+		log.Printf("global pct warning (steamID=%s, appID=%d): %v", steamID, appID, err)
+		pcts = map[string]float64{}
+	}
+
+	userStats, err := fetchUserAchievementStats(s.apiKey, steamID, appID)
+	if err != nil {
+		if errors.Is(err, errProfilePrivate) {
+			return err
+		}
+		return fmt.Errorf("user stats fetch: %w", err)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM user_achievements WHERE steam_id=? AND app_id=?`, steamID, appID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM user_games WHERE steam_id=? AND app_id=?`, steamID, appID); err != nil {
+		return err
+	}
+
+	achStmt, err := tx.Prepare(`
+		INSERT INTO user_achievements(steam_id, app_id, api_name, name, description, icon, icon_gray, hidden, achieved, unlock_time, global_pct, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer achStmt.Close()
+
+	now := time.Now().Unix()
+	unlockedCount := 0
+	for _, a := range schema {
+		st, ok := userStats[a.APIName]
+		if st.Achieved {
+			unlockedCount++
+		}
+
+		hidden := 0
+		if a.Hidden {
+			hidden = 1
+		}
+		achieved := 0
+		if ok && st.Achieved {
+			achieved = 1
+		}
+
+		if _, err := achStmt.Exec(
+			steamID,
+			appID,
+			a.APIName,
+			a.Name,
+			a.Description,
+			a.Icon,
+			a.IconGray,
+			hidden,
+			achieved,
+			st.UnlockTime,
+			pcts[a.APIName],
+			now,
+		); err != nil {
+			return err
+		}
+	}
+
+	if len(schema) > 0 {
+		completion := float64(unlockedCount) * 100.0 / float64(len(schema))
+		name := target.Name
+		if !found || strings.TrimSpace(name) == "" {
+			name = fmt.Sprintf("App %d", appID)
+		}
+		playtime := 0
+		if found {
+			playtime = target.PlaytimeForever
+		}
+
+		if _, err := tx.Exec(`
+			INSERT INTO user_games(steam_id, app_id, name, playtime_forever, total_achievements, unlocked_achievements, completion_pct, updated_at)
+			VALUES(?,?,?,?,?,?,?,?)
+		`, steamID, appID, name, playtime, len(schema), unlockedCount, completion, now); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(`
+		INSERT INTO user_stats(steam_id, games_count, avg_completion, updated_at)
+		SELECT steam_id, COUNT(*), COALESCE(AVG(completion_pct), 0.0), ?
+		FROM user_games
+		WHERE steam_id=?
+		GROUP BY steam_id
+		ON CONFLICT(steam_id) DO UPDATE SET
+			games_count=excluded.games_count,
+			avg_completion=excluded.avg_completion,
+			updated_at=excluded.updated_at
+	`, now, steamID); err != nil {
+		return err
+	}
+
+	appSyncKey := "last_sync_app_" + strconv.Itoa(appID)
+	if _, err := tx.Exec(`
+		INSERT INTO user_meta(steam_id,key,value) VALUES(?,?,?)
+		ON CONFLICT(steam_id,key) DO UPDATE SET value=excluded.value
+	`, steamID, appSyncKey, strconv.FormatInt(now, 10)); err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(summary.DisplayName) != "" {
+		if _, err := tx.Exec(`
+			INSERT INTO user_meta(steam_id,key,value) VALUES(?,?,?)
+			ON CONFLICT(steam_id,key) DO UPDATE SET value=excluded.value
+		`, steamID, "profile_name", summary.DisplayName); err != nil {
+			return err
+		}
+	}
+
+	if strings.TrimSpace(summary.AvatarURL) != "" {
+		if _, err := tx.Exec(`
+			INSERT INTO user_meta(steam_id,key,value) VALUES(?,?,?)
+			ON CONFLICT(steam_id,key) DO UPDATE SET value=excluded.value
+		`, steamID, "profile_avatar", summary.AvatarURL); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
 func (s *Server) syncFromSteam(lang string) error {
 	schema, err := fetchSchemaForGame(s.apiKey, defaultGlobalAppID, lang)
 	if err != nil {

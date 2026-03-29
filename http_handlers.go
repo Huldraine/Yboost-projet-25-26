@@ -170,14 +170,14 @@ func (s *Server) handleUserAchievements(w http.ResponseWriter, r *http.Request) 
 	}
 
 	forceRefresh := shouldForceRefresh(r)
-	expired, err := s.isUserCacheExpired(steamID)
+	expired, err := s.isUserGameCacheExpired(steamID, appID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
 
 	if forceRefresh || expired {
-		if err := s.syncUserData(steamID, "french"); err != nil {
+		if err := s.syncUserGameData(steamID, appID, "french"); err != nil {
 			cachedItems, readErr := s.readUserAchievementsFromDB(steamID, appID)
 			if readErr == nil && len(cachedItems) > 0 {
 				log.Printf("steam sync warning (achievements, steamID=%s, appID=%d): %v (serving cached data)", steamID, appID, err)
