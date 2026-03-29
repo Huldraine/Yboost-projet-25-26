@@ -40,9 +40,11 @@ func main() {
 
 	store, err := newSupabaseStore(supabaseDSN)
 	if err != nil {
-		log.Fatalf("supabase init error: %v", err)
+		log.Printf("supabase init warning: %v", err)
+		log.Printf("Supabase ORM inactive (startup continues with SQLite only)")
+	} else {
+		s.supabase = store
 	}
-	s.supabase = store
 	if s.supabase != nil && s.supabase.isEnabled() {
 		log.Printf("Supabase ORM active")
 	} else {
