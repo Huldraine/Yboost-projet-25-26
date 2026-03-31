@@ -65,6 +65,9 @@ func main() {
 	mux.HandleFunc("/api/users/achievements", s.handleUserAchievements)
 	mux.HandleFunc("/api/crud/users", s.handleTrackedUsers)
 	mux.HandleFunc("/api/crud/users/", s.handleTrackedUserByID)
+	mux.HandleFunc("/api/crud/users/save", s.handleSaveTrackedUser)
+	mux.HandleFunc("/api/crud/leaderboard", s.handleTrackedLeaderboard)
+	mux.HandleFunc("/api/crud/cache", s.handleSupabaseCache)
 
 	mux.Handle("/", withStaticCache(http.FileServer(http.Dir("./static"))))
 

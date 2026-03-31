@@ -81,6 +81,21 @@ header h1 { margin: 0 0 6px; font-size: 29px; letter-spacing: 0.02em; }
   font-size: 13px;
 }
 
+.supabaseActions {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.dangerBtn {
+  background: linear-gradient(180deg, rgba(214, 107, 88, 0.35), rgba(214, 107, 88, 0.18));
+}
+
+.dangerBtn:hover {
+  background: linear-gradient(180deg, rgba(214, 107, 88, 0.46), rgba(214, 107, 88, 0.28));
+}
+
 .controls {
   display: grid;
   grid-template-columns: 1fr 170px 160px 170px;
@@ -121,6 +136,70 @@ input[type="text"] {
 
 .check { display: inline-flex; gap: 8px; align-items: center; color: var(--muted); user-select: none; }
 .meta { display: flex; gap: 14px; color: var(--muted); }
+
+.leaderboardPanel {
+  margin: 4px 0 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+}
+
+.leaderboardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.leaderboardHeader h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.leaderboardBox {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: rgba(0,0,0,.18);
+}
+
+.leaderboardList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.leaderboardList li {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.03);
+}
+
+.leaderboardList .rank {
+  font-weight: 700;
+  color: #c8f5ee;
+}
+
+.leaderboardList .name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leaderboardList .stats {
+  color: var(--muted);
+  font-size: 13px;
+}
 
 .grid {
   display: grid;
@@ -255,6 +334,9 @@ input[type="text"] {
 
 @media (max-width: 900px) {
   .steamForm { grid-template-columns: 1fr; }
+  .supabaseActions { grid-template-columns: 1fr; }
+  .leaderboardHeader { flex-direction: column; align-items: flex-start; }
+  .leaderboardList li { grid-template-columns: 1fr; }
   .controls { grid-template-columns: 1fr; }
   .grid { grid-template-columns: 1fr; }
 }

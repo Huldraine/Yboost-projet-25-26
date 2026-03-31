@@ -14,11 +14,14 @@ type SupabaseStore struct {
 }
 
 type TrackedUser struct {
-	ID        uint      `json:"id" gorm:"primaryKey"`
-	SteamID   string    `json:"steamId" gorm:"size:17;not null;uniqueIndex"`
-	Nickname  string    `json:"nickname" gorm:"size:120;not null"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID                   uint      `json:"id" gorm:"primaryKey"`
+	SteamID              string    `json:"steamId" gorm:"size:17;not null;uniqueIndex"`
+	Nickname             string    `json:"nickname" gorm:"size:120;not null"`
+	GamesCount           int       `json:"gamesCount" gorm:"not null;default:0"`
+	TotalAchievements    int       `json:"totalAchievements" gorm:"not null;default:0"`
+	UnlockedAchievements int       `json:"unlockedAchievements" gorm:"not null;default:0"`
+	CreatedAt            time.Time `json:"createdAt"`
+	UpdatedAt            time.Time `json:"updatedAt"`
 }
 
 func newSupabaseStore(dsn string) (*SupabaseStore, error) {

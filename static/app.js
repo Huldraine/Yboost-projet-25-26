@@ -17,6 +17,11 @@ const els = {
   profileAvatar: document.getElementById("profileAvatar"),
   profileName: document.getElementById("profileName"),
   profileSteamId: document.getElementById("profileSteamId"),
+  supabaseActions: document.getElementById("supabaseActions"),
+  saveProfileStats: document.getElementById("saveProfileStats"),
+  clearSupabaseCache: document.getElementById("clearSupabaseCache"),
+  refreshLeaderboard: document.getElementById("refreshLeaderboard"),
+  leaderboardBox: document.getElementById("leaderboardBox"),
   status: document.getElementById("status"),
   count: document.getElementById("count"),
   errorBox: document.getElementById("errorBox"),
@@ -75,16 +80,27 @@ function getSteamGameImageURL(appId) {
   return `https://cdn.cloudflare.steamstatic.com/steam/apps/${id}/header.jpg`;
 }
 
-async function getJSON(url) {
+async function requestJSON(url, method = "GET", payload) {
   const isApiPath = typeof url === "string" && url.startsWith("/api/");
+  const options = {
+    method,
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json"
+    }
+  };
+  if (payload !== undefined) {
+    options.body = JSON.stringify(payload);
+  }
+
   if (!isApiPath) {
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetch(url, options);
     const body = await res.json().catch(() => null);
     if (!res.ok) {
       const details = body?.details || `HTTP ${res.status}`;
       throw new Error(details);
     }
-    return body;
+    return body ?? null;
   }
 
   const bases = [];
@@ -102,10 +118,10 @@ async function getJSON(url) {
   for (const base of bases) {
     const fullURL = `${base}${url}`;
     try {
-      const res = await fetch(fullURL, { cache: "no-store" });
+      const res = await fetch(fullURL, options);
       const body = await res.json().catch(() => null);
       if (res.ok) {
-        return body;
+        return body ?? null;
       }
       // On a static server (Five Server), /api/* usually returns 404 HTML.
       if (res.status === 404) {
@@ -120,6 +136,10 @@ async function getJSON(url) {
   }
 
   throw lastError || new Error("API indisponible");
+}
+
+async function getJSON(url) {
+  return requestJSON(url, "GET");
 }
 
 async function loadUserSuggestions(query) {
@@ -220,6 +240,7 @@ function renderProfile(profile) {
   }
 
   els.profileCard.classList.remove("hidden");
+  els.supabaseActions.classList.remove("hidden");
 }
 
 async function resolveProfileFromInput(rawValue) {
@@ -276,6 +297,97 @@ async function loadGames(forceRefresh = false) {
     setError(err.message || "Erreur inconnue");
     allGames = [];
     renderGames();
+  }
+}
+
+function collectCurrentStats() {
+  if (!Array.isArray(allGames) || allGames.length === 0) {
+    return null;
+  }
+
+  return allGames.reduce((acc, game) => {
+    acc.gamesCount += 1;
+    acc.totalAchievements += Number(game.totalAchievements || 0);
+    acc.unlockedAchievements += Number(game.unlockedAchievements || 0);
+    return acc;
+  }, { gamesCount: 0, totalAchievements: 0, unlockedAchievements: 0 });
+}
+
+async function saveCurrentProfileStats() {
+  if (!isValidSteamID64(currentSteamID)) {
+    setError("Charge d'abord un profil Steam valide.");
+    return;
+  }
+
+  setError("");
+  const payload = {
+    steamId: currentSteamID,
+    nickname: String(els.profileName.textContent || currentSteamID).trim() || currentSteamID
+  };
+  const stats = collectCurrentStats();
+  if (stats) {
+    payload.gamesCount = stats.gamesCount;
+    payload.totalAchievements = stats.totalAchievements;
+    payload.unlockedAchievements = stats.unlockedAchievements;
+  }
+
+  try {
+    const saved = await requestJSON("/api/crud/users/save", "POST", payload);
+    els.status.textContent = `Profil sauvegarde: ${saved.nickname}`;
+    await loadLeaderboard();
+  } catch (err) {
+    setError(err.message || "Impossible de sauvegarder le profil dans Supabase.");
+  }
+}
+
+function renderLeaderboard(items) {
+  const rows = Array.isArray(items) ? items : [];
+  if (rows.length === 0) {
+    els.leaderboardBox.className = "leaderboardBox muted";
+    els.leaderboardBox.textContent = "Aucun profil sauvegarde pour le moment.";
+    return;
+  }
+
+  const lines = rows.map((item, idx) => {
+    const rank = idx + 1;
+    const name = esc(item.nickname || item.steamId || "Inconnu");
+    const unlocked = Number(item.unlockedAchievements || 0);
+    const total = Number(item.totalAchievements || 0);
+    const games = Number(item.gamesCount || 0);
+    return `
+      <li>
+        <span class="rank">#${rank}</span>
+        <span class="name">${name}</span>
+        <span class="stats">${unlocked} / ${total} debloques • ${games} jeux</span>
+      </li>
+    `;
+  }).join("");
+
+  els.leaderboardBox.className = "leaderboardBox";
+  els.leaderboardBox.innerHTML = `<ol class="leaderboardList">${lines}</ol>`;
+}
+
+async function loadLeaderboard() {
+  try {
+    const rows = await getJSON("/api/crud/leaderboard?limit=50");
+    renderLeaderboard(rows);
+  } catch (err) {
+    els.leaderboardBox.className = "leaderboardBox muted";
+    els.leaderboardBox.textContent = err.message || "Impossible de charger le classement.";
+  }
+}
+
+async function clearSupabaseCache() {
+  if (!window.confirm("Supprimer tous les profils sauvegardes du classement Supabase ?")) {
+    return;
+  }
+  setError("");
+  try {
+    await requestJSON("/api/crud/cache", "DELETE");
+    els.status.textContent = "Cache Supabase vide";
+    await loadLeaderboard();
+  } catch (err) {
+    setError(err.message || "Impossible de vider le cache Supabase.");
   }
 }
 
@@ -435,6 +547,7 @@ els.steamForm.addEventListener("submit", async (ev) => {
   } catch (err) {
     currentSteamID = "";
     els.profileCard.classList.add("hidden");
+    els.supabaseActions.classList.add("hidden");
     setError(err.message || "Pseudo non trouve en base. Choisis une proposition ou saisis un SteamID64 valide.");
     return;
   }
@@ -454,6 +567,9 @@ els.steamId.addEventListener("focus", () => {
 });
 
 els.refreshGames.addEventListener("click", () => loadGames(true));
+els.saveProfileStats.addEventListener("click", saveCurrentProfileStats);
+els.clearSupabaseCache.addEventListener("click", clearSupabaseCache);
+els.refreshLeaderboard.addEventListener("click", loadLeaderboard);
 els.backToGames.addEventListener("click", () => {
   showGamesView();
   renderGames();
@@ -469,3 +585,4 @@ els.backToGames.addEventListener("click", () => {
 });
 
 els.status.textContent = "Pret";
+loadLeaderboard();

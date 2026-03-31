@@ -27,6 +27,11 @@
       </div>
     </section>
 
+    <div id="supabaseActions" class="supabaseActions hidden">
+      <button id="saveProfileStats" type="button">Sauvegarder ce profil (classement)</button>
+      <button id="clearSupabaseCache" type="button" class="dangerBtn">Vider le cache Supabase</button>
+    </div>
+
     <div id="gamesControls" class="controls">
       <input id="gameQ" type="search" placeholder="Rechercher un jeu..." autocomplete="off" />
       <select id="gameSort">
@@ -60,6 +65,14 @@
   </header>
 
   <main class="container">
+    <section class="leaderboardPanel">
+      <div class="leaderboardHeader">
+        <h2>Classement des profils sauvegardes</h2>
+        <button id="refreshLeaderboard" type="button" class="smallBtn">Actualiser classement</button>
+      </div>
+      <div id="leaderboardBox" class="leaderboardBox muted">Aucun profil sauvegarde pour le moment.</div>
+    </section>
+
     <div id="gamesGrid" class="grid"></div>
     <div id="achievementsGrid" class="grid hidden"></div>
   </main>
