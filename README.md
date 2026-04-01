@@ -229,6 +229,8 @@ SQLite:
 Supabase/PostgreSQL:
 - tracked_users (table gérée par GORM)
 
+![IMG1](image/schema_visualizer.png)
+
 ## Frontend
 
 Fichiers statiques:
